@@ -40,9 +40,20 @@ object AdsManager {
 
     val isEnabled: Boolean get() = ::config.isInitialized && config.enabled
 
-    fun install(application: Application, config: AdsConfig = AppAdsConfig.value, onPaid: (PaidEvent) -> Unit = {},
-                onTiming: (AdTiming) -> Unit = {}) {
-        checkMain()
+    // 单例初始化
+    /**
+     * @param application Application 实例，供 SDK 初始化和广告加载使用
+     * @param config 广告配置（开关、各 placement 等），默认取 AppAdsConfig.value
+     * @param onPaid 广告产生收益（paid event）时的回调
+     * @param onTiming 耗时埋点回调，如 sdk_ready、loaded、load_failed 等阶段的计时上报
+     */
+    fun install(
+        application: Application, config: AdsConfig = AppAdsConfig.value, onPaid: (PaidEvent) -> Unit = {},
+        onTiming: (AdTiming) -> Unit = {}
+    ) {
+        checkMain() // 强制要求在主线程调用
+
+        //防重复初始化
         if (::app.isInitialized) {
             require(app === application && this.config == config) { "AdsManager already installed with another configuration" }
             return
@@ -55,7 +66,8 @@ object AdsManager {
 
     private class Session {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val inventory = AdInventory(scope, SystemClock::elapsedRealtime,
+        val inventory = AdInventory(
+            scope, SystemClock::elapsedRealtime,
             ttl = { name -> TimeUnit.HOURS.toMillis(if (config.placements.getValue(name).format == AdFormat.APP_OPEN) 4 else 1) },
             discard = LoadedAd::destroy,
             request = { name, callback ->
@@ -110,21 +122,24 @@ object AdsManager {
         return result
     }
 
-    suspend fun runStartup(activity: Activity, canRequestAds: Boolean): StartupResult = withContext(Dispatchers.Main.immediate) {
-        setRequestPermission(canRequestAds)
-        val current = session ?: return@withContext StartupResult(AdResult.DISABLED, 0, null)
-        val schedule = current.startup ?: StartupSchedule(current.scope, config, initialize(),
-            SystemClock::elapsedRealtime, current.inventory::load).also { current.startup = it }
-        val gate = try {
-            schedule.gate.await()
-        } catch (error: CancellationException) {
-            currentCoroutineContext().ensureActive()
-            return@withContext StartupResult(AdResult.DISABLED, 0, null)
+    suspend fun runStartup(activity: Activity, canRequestAds: Boolean): StartupResult =
+        withContext(Dispatchers.Main.immediate) {
+            setRequestPermission(canRequestAds)
+            val current = session ?: return@withContext StartupResult(AdResult.DISABLED, 0, null)
+            val schedule = current.startup ?: StartupSchedule(
+                current.scope, config, initialize(),
+                SystemClock::elapsedRealtime, current.inventory::load
+            ).also { current.startup = it }
+            val gate = try {
+                schedule.gate.await()
+            } catch (error: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                return@withContext StartupResult(AdResult.DISABLED, 0, null)
+            }
+            if (session !== current) return@withContext gate.copy(gate = AdResult.DISABLED)
+            val presentation = schedule.presentOnce(gate) { name -> present(activity, name, AdFormat.APP_OPEN) }
+            gate.copy(presentation = presentation)
         }
-        if (session !== current) return@withContext gate.copy(gate = AdResult.DISABLED)
-        val presentation = schedule.presentOnce(gate) { name -> present(activity, name, AdFormat.APP_OPEN) }
-        gate.copy(presentation = presentation)
-    }
 
     suspend fun preload(name: String): AdResult = withContext(Dispatchers.Main.immediate) {
         val current = session ?: return@withContext AdResult.DISABLED
@@ -147,7 +162,8 @@ object AdsManager {
         if (slot.format != format) return CompletableDeferred(AdResult.WRONG_FORMAT)
         val owner = activity as? LifecycleOwner
         if (activity.isFinishing || activity.isDestroyed || owner == null ||
-            !owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return CompletableDeferred(AdResult.INVALID_HOST)
+            !owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        ) return CompletableDeferred(AdResult.INVALID_HOST)
         if (fullscreen.isShowing) return CompletableDeferred(AdResult.BUSY)
         val ad = current.inventory.take(name) as? LoadedAd.FullScreen ?: return CompletableDeferred(AdResult.NOT_READY)
         val result = CompletableDeferred<AdResult>()
@@ -168,7 +184,10 @@ object AdsManager {
         owner.lifecycle.addObserver(observer)
         try {
             ad.present(activity, object : FullScreenContentCallback() {
-                override fun onAdShowedFullScreenContent() { shownAt = SystemClock.elapsedRealtime() }
+                override fun onAdShowedFullScreenContent() {
+                    shownAt = SystemClock.elapsedRealtime()
+                }
+
                 override fun onAdDismissedFullScreenContent() = finish(AdResult.DISMISSED)
                 override fun onAdFailedToShowFullScreenContent(error: AdError) = finish(AdResult.FAILED)
             })
@@ -191,8 +210,10 @@ object AdsManager {
             }
         }
 
-    suspend fun withBannerAd(context: Context, name: String, widthDp: Int,
-                             onLoadResult: (AdResult) -> Unit = {}, use: suspend (AdView) -> Unit): AdResult =
+    suspend fun withBannerAd(
+        context: Context, name: String, widthDp: Int,
+        onLoadResult: (AdResult) -> Unit = {}, use: suspend (AdView) -> Unit
+    ): AdResult =
         withPlacement(name, AdFormat.BANNER) { _, slot ->
             require(widthDp > 0) { "Banner width must be positive" }
             val view = AdView(context)
@@ -211,8 +232,10 @@ object AdsManager {
             }
         }
 
-    private suspend fun withPlacement(name: String, format: AdFormat,
-                                      use: suspend (Session, Placement) -> AdResult): AdResult =
+    private suspend fun withPlacement(
+        name: String, format: AdFormat,
+        use: suspend (Session, Placement) -> AdResult
+    ): AdResult =
         withContext(Dispatchers.Main.immediate) {
             val current = session ?: return@withContext AdResult.DISABLED
             val slot = config.placements[name] ?: return@withContext AdResult.UNKNOWN_PLACEMENT
