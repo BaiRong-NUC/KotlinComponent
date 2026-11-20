@@ -61,6 +61,10 @@ object AdsManager {
         app = application
         this.config = config
         this.onTiming = onTiming
+        /*
+         * AdMobBackend 封装了按广告形式加载广告的逻辑（开屏/插页/原生/横幅），内部用 AdMobRequests 发请求。
+         * onPaid 回调被包进 backend：每个广告加载成功后，backend 会给广告挂 onPaidEventListener，GMA SDK 上报收益时组装成 PaidEvent 回调给业务方。
+         */
         backend = AdMobBackend(app, onPaid)
     }
 
