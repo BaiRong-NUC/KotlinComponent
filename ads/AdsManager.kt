@@ -165,22 +165,55 @@ object AdsManager {
         return result
     }
 
+    // runStartup = "启动页等广告"的总入口——先按权限建会话，再触发 SDK 初始化和预加载，挂起等 进首页放行"判定
+    /**
+     * @param activity 当前活动
+     * @param canRequestAds 是否可以请求广告
+     * @return 启动结果
+     */
     suspend fun runStartup(activity: Activity, canRequestAds: Boolean): StartupResult =
+        // 整个函数体跑在主线程
         withContext(Dispatchers.Main.immediate) {
-            setRequestPermission(canRequestAds)
+            setRequestPermission(canRequestAds) // 按照用户传递的隐私等广告同意策略创建广告Session
+            // return@withContext 切换协程的上下文（通常是线程/调度器），执行一段代码块，然后把结果带回来
             val current = session ?: return@withContext StartupResult(AdResult.DISABLED, 0, null)
+
+            /**
+             * 拿到本次会话的 StartupSchedule
+             * 没有就延迟创建（传入 scope、config、SDK 初始化 Deferred、时钟、inventory.load 方法引用）并缓存到 session.startup 复用
+             */
             val schedule = current.startup ?: StartupSchedule(
-                current.scope, config, initialize(),
-                SystemClock::elapsedRealtime, current.inventory::load
-            ).also { current.startup = it }
+                current.scope,
+                config,
+                initialize(),
+                SystemClock::elapsedRealtime,
+                current.inventory::load // current.inventory::load 方法引用,方便StartupSchedule按照调度规则按需加载广告
+            ).also {
+                // current.startup=null，创建新的StartupSchedule并缓存到session.startup
+                current.startup = it
+            }
+
+            /**
+             * schedule.gate 是 StartupSchedule 里的 Deferred<StartupResult>
+             *
+             * 它内部在跑"进首页放行判定"（等 SDK/等广告/超时）
+             */
             val gate = try {
                 schedule.gate.await()
             } catch (error: CancellationException) {
-                currentCoroutineContext().ensureActive()
+                //调用方协程可能被取消（比如 Activity 销毁、用户退出）
+                currentCoroutineContext().ensureActive() //如果当前协程已取消，重新抛
                 return@withContext StartupResult(AdResult.DISABLED, 0, null)
             }
+
+            // 竞态防护：await() 挂起期间，session 可能被 setRequestPermission(false) 换成新的 Session
+            // 如果当前 session 不是刚才 await 前那个 → 说明等待期间会话被重置 → 广告上下文变了，结果作废，返回 DISABLED
             if (session !== current) return@withContext gate.copy(gate = AdResult.DISABLED)
+
+            // 执行一次开屏,并将结果复制到gate
             val presentation = schedule.presentOnce(gate) { name -> present(activity, name, AdFormat.APP_OPEN) }
+
+            //基于 gate 这个 StartupResult 实例，复制出一个新实例，只改 presentation 字段，其他字段保持不变
             gate.copy(presentation = presentation)
         }
 
