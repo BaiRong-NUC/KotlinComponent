@@ -63,42 +63,74 @@ object AdsManager {
         this.onTiming = onTiming
         /*
          * AdMobBackend 封装了按广告形式加载广告的逻辑（开屏/插页/原生/横幅），内部用 AdMobRequests 发请求。
+         * 
          * onPaid 回调被包进 backend：每个广告加载成功后，backend 会给广告挂 onPaidEventListener，GMA SDK 上报收益时组装成 PaidEvent 回调给业务方。
          */
         backend = AdMobBackend(app, onPaid)
     }
 
+    // 一次广告可用会话类
     private class Session {
+        /**
+         * 定义协程作用域:
+         *
+         * SupervisorJob：子协程失败不连累兄弟（一个广告加载失败不影响其他）。
+         *
+         * Dispatchers.Main.immediate：在主线程跑，且已在主线程时立即执行不排队（广告 SDK 多要求主线程）
+         *
+         * Session 销毁时 scope.cancel()，里面跑的预加载、过期任务全停。
+         */
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+
+        // 广告库存管理器,负责广告的加载、缓存、过期处理等
+
+        /**
+         * scope: 协程作用域，用于管理广告加载、缓存等协程任务
+         * SystemClock::elapsedRealtime: 时间戳获取函数，用于计算广告过期时间
+         * ttl: 广告过期时间，根据广告形式（开屏/插页/原生/横幅）设置不同的过期时间
+         * discard: 广告销毁回调，用于释放广告资源
+         * request: 广告请求回调，用于加载广告
+         */
         val inventory = AdInventory(
             scope, SystemClock::elapsedRealtime,
             ttl = { name -> TimeUnit.HOURS.toMillis(if (config.placements.getValue(name).format == AdFormat.APP_OPEN) 4 else 1) },
             discard = LoadedAd::destroy,
             request = { name, callback ->
-                val start = SystemClock.elapsedRealtime()
+                val start = SystemClock.elapsedRealtime() // 记录开始时间
                 try {
+                    // AdMobBackend 按该位配置发请求
                     backend.load(name, config.placements.getValue(name)) { ad ->
+                        // callback 是 AdInventory 在调用 request(name, callback) 时传进来的一个函数参数，作用是"广告加载完了，把结果交回仓库去存/标记结果"
                         callback(ad)
+                        // 上报耗时埋点
                         timing(if (ad == null) "load_failed" else "loaded", name, start)
                     }
                 } catch (error: RuntimeException) {
+                    // 加载抛异常时 callback(null) 并记 load_failed
                     callback(null)
                     timing("load_failed", name, start)
                 }
             })
+
+        // 记录本次广告会话的启动任务单 ——预加载发了哪些、放行判定结果、开屏有没有展示过
         var startup: StartupSchedule? = null
     }
 
+    // 广告会话总开关,权限给了且配置启用时就创建 Session（允许预加载/展示）
     fun setRequestPermission(canRequestAds: Boolean) {
         checkMain()
         check(::config.isInitialized) { "Call AdsManager.install first" }
+        // 业务传入的"现在有请求广告的权限"，比如隐私同意已给、GDPR/ATT 通过）
+        // 并且 config.enabled（配置总开关没关）
         if (canRequestAds && config.enabled) {
             if (session == null) session = Session()
         } else {
+            // 没有广告，清理广告资源
             val previous = session ?: return
             session = null
-            previous.inventory.clear()
-            previous.scope.cancel()
+            previous.inventory.clear() // 把缓存里已加载的广告全部取出销毁
+            previous.scope.cancel() // 取消Session的协程资源
         }
     }
 
