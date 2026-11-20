@@ -136,8 +136,10 @@ internal typealias AppAdsConfig = dev.manage.ads.AppAdsConfig
 
 def targetAppPath = extensions.extraProperties.has('manageAdsAppPath') ?
     extensions.extraProperties.get('manageAdsAppPath') : ':app'
+def adsPath = extensions.extraProperties.has('manageAdsDir') ?
+    extensions.extraProperties.get('manageAdsDir') : 'ads'
 if (findProject(targetAppPath) == null) {
-    throw new GradleException("ads: include ${targetAppPath} before applying ads/ads.gradle, or set manageAdsAppPath to your application module path")
+    throw new GradleException("ads: include ${targetAppPath} before applying gradle/ads.gradle, or set manageAdsAppPath to your application module path")
 }
 
 gradle.settingsEvaluated { settings ->
@@ -162,7 +164,8 @@ gradle.settingsEvaluated { settings ->
 }
 
 def configureAds = { Project app ->
-    app.extensions.getByName('android').sourceSets.main.kotlin.srcDir(app.rootProject.file('ads'))
+    def adsDir = app.rootProject.layout.projectDirectory.dir(adsPath)
+    app.extensions.getByName('android').sourceSets.main.kotlin.srcDir(adsDir.asFile)
     app.dependencies {
         implementation 'com.google.android.gms:play-services-ads:25.5.0'
         implementation 'androidx.lifecycle:lifecycle-runtime:2.9.4'
@@ -180,7 +183,7 @@ def configureAds = { Project app ->
         def flavors = variant.productFlavors.collect { it.second }
         def sourceSets = ([variant.name, variant.buildType, variant.flavorName] + flavors + ['main']).findAll { it }.unique()
         def files = sourceSets.collect { app.layout.projectDirectory.file("src/${it}/ads.json") }
-        files.add(app.rootProject.layout.projectDirectory.file('ads/conf/ads.json'))
+        files.add(adsDir.file('conf/ads.json'))
         def selected = files.find { it.asFile.isFile() }
         if (selected == null) throw new GradleException("${app.path}: missing ads.json for ${variant.name}; checked ${files}")
         def text = app.providers.fileContents(selected).asText

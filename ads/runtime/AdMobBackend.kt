@@ -3,14 +3,12 @@ package dev.manage.ads.runtime
 import android.app.Activity
 import android.app.Application
 import com.google.android.gms.ads.*
-import com.google.android.gms.ads.appopen.AppOpenAd
-import com.google.android.gms.ads.interstitial.InterstitialAd
-import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
 import com.google.android.gms.ads.nativead.NativeAd
 import dev.manage.ads.data.AdFormat
 import dev.manage.ads.data.AdResult
 import dev.manage.ads.data.PaidEvent
 import dev.manage.ads.data.Placement
+import dev.manage.ads.net.AdMobRequests
 
 internal sealed class LoadedAd {
     class FullScreen(val present: (Activity, FullScreenContentCallback) -> Unit) : LoadedAd()
@@ -21,7 +19,9 @@ internal sealed class LoadedAd {
     }
 }
 
-internal class AdMobBackend(private val app: Application, private val paid: (PaidEvent) -> Unit) {
+internal class AdMobBackend(app: Application, private val paid: (PaidEvent) -> Unit) {
+    private val requests = AdMobRequests(app)
+
     private fun paidListener(name: String, slot: Placement, response: () -> ResponseInfo?) =
         OnPaidEventListener { value ->
             paid(PaidEvent(name, slot.format, slot.unitId, value.valueMicros, value.currencyCode,
@@ -36,41 +36,35 @@ internal class AdMobBackend(private val app: Application, private val paid: (Pai
             override fun onAdLoaded() = onResult(AdResult.READY)
             override fun onAdFailedToLoad(error: LoadAdError) = onResult(AdResult.FAILED)
         }
-        view.loadAd(AdRequest.Builder().build())
+        requests.loadBanner(view)
     }
 
     fun load(name: String, slot: Placement, complete: (LoadedAd?) -> Unit) {
-        val request = AdRequest.Builder().build()
         when (slot.format) {
-            AdFormat.APP_OPEN -> AppOpenAd.load(app, slot.unitId, request, object : AppOpenAd.AppOpenAdLoadCallback() {
-                override fun onAdFailedToLoad(error: LoadAdError) = complete(null)
-                override fun onAdLoaded(ad: AppOpenAd) {
+            AdFormat.APP_OPEN -> requests.loadAppOpen(slot.unitId) { loaded ->
+                complete(loaded?.let { ad ->
                     ad.onPaidEventListener = paidListener(name, slot) { ad.responseInfo }
-                    complete(LoadedAd.FullScreen { activity, callback ->
+                    LoadedAd.FullScreen { activity, callback ->
                         ad.fullScreenContentCallback = callback
                         ad.show(activity)
-                    })
-                }
-            })
-            AdFormat.INTERSTITIAL -> InterstitialAd.load(app, slot.unitId, request, object : InterstitialAdLoadCallback() {
-                override fun onAdFailedToLoad(error: LoadAdError) = complete(null)
-                override fun onAdLoaded(ad: InterstitialAd) {
-                    ad.onPaidEventListener = paidListener(name, slot) { ad.responseInfo }
-                    complete(LoadedAd.FullScreen { activity, callback ->
-                        ad.fullScreenContentCallback = callback
-                        ad.show(activity)
-                    })
-                }
-            })
-            AdFormat.NATIVE -> AdLoader.Builder(app, slot.unitId)
-                .forNativeAd { ad ->
-                    ad.setOnPaidEventListener(paidListener(name, slot) { ad.responseInfo })
-                    complete(LoadedAd.Native(ad))
-                }
-                .withAdListener(object : AdListener() {
-                    override fun onAdFailedToLoad(error: LoadAdError) = complete(null)
+                    }
                 })
-                .build().loadAd(request)
+            }
+            AdFormat.INTERSTITIAL -> requests.loadInterstitial(slot.unitId) { loaded ->
+                complete(loaded?.let { ad ->
+                    ad.onPaidEventListener = paidListener(name, slot) { ad.responseInfo }
+                    LoadedAd.FullScreen { activity, callback ->
+                        ad.fullScreenContentCallback = callback
+                        ad.show(activity)
+                    }
+                })
+            }
+            AdFormat.NATIVE -> requests.loadNative(slot.unitId) { loaded ->
+                complete(loaded?.let { ad ->
+                    ad.setOnPaidEventListener(paidListener(name, slot) { ad.responseInfo })
+                    LoadedAd.Native(ad)
+                })
+            }
             AdFormat.BANNER -> error("Banner requests require a measured view")
         }
     }

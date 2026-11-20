@@ -7,17 +7,18 @@
 | `AdsManager.kt` | 安装、授权、启动等待，以及四类广告的业务入口。 |
 | `data/AdsConfig.kt` | 定义广告位、启动策略、展示结果和收益事件。 |
 | `conf/ads.json` | 默认广告位、广告单元 ID 和启动策略。 |
-| `runtime/` | SDK 加载、缓存、预加载阶段调度和全屏展示互斥。 |
-| `ads.gradle` | 声明广告 SDK、聚合适配器和 Maven 仓库，编译组件源码，按变体从 `ads.json` 生成配置和 Manifest 中的 AdMob App ID。 |
+| `runtime/` | 按广告位分发请求、监听 SDK 收益、读取广告源并组装 `PaidEvent`，同时负责缓存、预加载和全屏展示互斥。 |
+| [`net/AdMobRequests.kt`](net/AdMobRequests.kt) | 调用 AdMob SDK 发起四类广告的加载请求。 |
+| [sample/gradle/ads.gradle](../sample/gradle/ads.gradle) | 宿主可复用的接入脚本，声明 SDK 和聚合依赖，按变体从 `ads.json` 生成配置和 Manifest 中的 AdMob App ID。 |
 
 ## 接入一个 App
 
-将整个 `ads/` 复制到目标项目根目录，和 `app/` 放在同一级。组件的全部源码、配置和构建依赖声明都在这个目录里。
+将 `ads/` 复制到目标项目根目录，与 `app/` 同级。将仓库中的 `sample/gradle/ads.gradle` 复制到目标项目的 `gradle/ads.gradle`。
 
 1. 在宿主 `settings.gradle.kts` 的 `include(":app")` 之后加一行。
 
    ```kotlin
-   apply(from = "ads/ads.gradle")
+   apply(from = "gradle/ads.gradle")
    ```
 
    默认接入 `:app`。如果应用模块叫 `:mobile`，在 `apply` 前加 `extra["manageAdsAppPath"] = ":mobile"`。脚本只把广告源码和依赖加入选定的应用模块。验证环境为 AndroidX、AGP 9.2.1、Gradle 9.4.1、compileSdk 36.1 和 minSdk 24。

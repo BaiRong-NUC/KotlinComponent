@@ -16,7 +16,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Manage"
-include(":sample")
-extra["manageAdsAppPath"] = ":sample"
-apply(from = "ads/ads.gradle")
+rootProject.name = "sample"
+extra["manageAdsAppPath"] = ":"
+extra["manageAdsDir"] = "../ads"
+apply(from = "gradle/ads.gradle")

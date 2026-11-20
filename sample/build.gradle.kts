@@ -4,6 +4,7 @@ plugins {
 
 android {
     namespace = "dev.manage.sample"
+    sourceSets.getByName("main").kotlin.srcDir(rootProject.file("../tool/http"))
     testOptions.unitTests.isReturnDefaultValues = true
     compileSdk { version = release(36) { minorApiLevel = 1 } }
     defaultConfig {
