@@ -241,9 +241,11 @@ object AdsManager {
         current.inventory.load(name).await()
     }
 
+    // 展示开屏广告
     suspend fun showAppOpen(activity: Activity, name: String): AdResult =
         withContext(Dispatchers.Main.immediate) { present(activity, name, AdFormat.APP_OPEN).await() }
 
+    // 展示插屏广告
     suspend fun showInterstitial(activity: Activity, name: String): AdResult =
         withContext(Dispatchers.Main.immediate) { present(activity, name, AdFormat.INTERSTITIAL).await() }
 
