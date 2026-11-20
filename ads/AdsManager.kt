@@ -2,15 +2,24 @@ package dev.manage.ads
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
 import android.os.Looper
 import android.os.SystemClock
-import android.view.ViewGroup
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import com.google.android.gms.ads.AdError
+import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.FullScreenContentCallback
 import com.google.android.gms.ads.MobileAds
+import com.google.android.gms.ads.nativead.NativeAd
+import dev.manage.ads.data.AdFormat
+import dev.manage.ads.data.AdResult
+import dev.manage.ads.data.AdTiming
+import dev.manage.ads.data.AdsConfig
+import dev.manage.ads.data.PaidEvent
+import dev.manage.ads.data.Placement
+import dev.manage.ads.data.StartupResult
 import dev.manage.ads.runtime.AdInventory
 import dev.manage.ads.runtime.AdMobBackend
 import dev.manage.ads.runtime.FullScreenAdSession
@@ -27,7 +36,6 @@ object AdsManager {
     private var sdk: CompletableDeferred<Boolean>? = null
     private var session: Session? = null
     private val fullscreen = FullScreenAdSession<LoadedAd.FullScreen>()
-    private val bindings = mutableMapOf<ViewGroup, AdBinding>()
     private var onTiming: (AdTiming) -> Unit = {}
 
     val isEnabled: Boolean get() = ::config.isInitialized && config.enabled
@@ -75,7 +83,6 @@ object AdsManager {
             session = null
             previous.inventory.clear()
             previous.scope.cancel()
-            bindings.values.toList().forEach(AdBinding::close)
         }
     }
 
@@ -171,57 +178,58 @@ object AdsManager {
         return result
     }
 
-    fun bindBanner(container: ViewGroup, name: String, owner: LifecycleOwner,
-                   onResult: (AdResult) -> Unit = {}): AdBinding =
-        bind(container, name, owner, AdFormat.BANNER, onResult, defaultNativeRenderer)
-
-    fun bindNative(container: ViewGroup, name: String, owner: LifecycleOwner,
-                   renderer: NativeRenderer = defaultNativeRenderer, onResult: (AdResult) -> Unit = {}): AdBinding =
-        bind(container, name, owner, AdFormat.NATIVE, onResult, renderer)
-
-    fun bindNative(container: ViewGroup, name: String, owner: LifecycleOwner,
-                   adLabel: CharSequence, onResult: (AdResult) -> Unit = {}): AdBinding =
-        bindNative(container, name, owner, { context, ad -> defaultNativeView(context, ad, adLabel) }, onResult)
-
-    private fun bind(container: ViewGroup, name: String, owner: LifecycleOwner, format: AdFormat,
-                     onResult: (AdResult) -> Unit, renderer: NativeRenderer): AdBinding {
-        checkMain()
-        bindings[container]?.close()
-        val binding = AdBinding(container, owner) { closed ->
-            if (bindings[container] === closed) bindings.remove(container)
-        }
-        if (binding.closed) {
-            onResult(AdResult.INVALID_HOST)
-            return binding
-        }
-        bindings[container] = binding
-        val current = session
-        val slot = if (::config.isInitialized) config.placements[name] else null
-        val error = when {
-            current == null -> AdResult.DISABLED
-            slot == null -> AdResult.UNKNOWN_PLACEMENT
-            slot.format != format -> AdResult.WRONG_FORMAT
-            else -> null
-        }
-        if (error != null) {
-            binding.close()
-            onResult(error)
-            return binding
-        }
-        binding.launch {
-            if (!initialize().await()) {
-                onResult(AdResult.FAILED)
-            } else if (format == AdFormat.BANNER) {
-                binding.loadBanner(slot!!.unitId, { view -> backend.paidListener(name, slot) { view.responseInfo } }, onResult)
-            } else {
-                val result = current!!.inventory.load(name).await()
-                val ad = current.inventory.take(name) as? LoadedAd.Native
-                if (ad != null) binding.attachNative(ad.ad, renderer, onResult)
-                else onResult(if (result == AdResult.READY) AdResult.NOT_READY else result)
+    suspend fun withNativeAd(name: String, use: suspend (NativeAd) -> Unit): AdResult =
+        withPlacement(name, AdFormat.NATIVE) { current, _ ->
+            val result = current.inventory.load(name).await()
+            if (result != AdResult.READY) return@withPlacement result
+            val ad = current.inventory.take(name) as? LoadedAd.Native ?: return@withPlacement AdResult.NOT_READY
+            try {
+                use(ad.ad)
+                AdResult.READY
+            } finally {
+                ad.destroy()
             }
         }
-        return binding
-    }
+
+    suspend fun withBannerAd(context: Context, name: String, widthDp: Int,
+                             onLoadResult: (AdResult) -> Unit = {}, use: suspend (AdView) -> Unit): AdResult =
+        withPlacement(name, AdFormat.BANNER) { _, slot ->
+            require(widthDp > 0) { "Banner width must be positive" }
+            val view = AdView(context)
+            var active = true
+            try {
+                try {
+                    backend.loadBanner(view, name, slot, widthDp) { if (active) onLoadResult(it) }
+                } catch (error: RuntimeException) {
+                    return@withPlacement AdResult.FAILED
+                }
+                use(view)
+                AdResult.READY
+            } finally {
+                active = false
+                view.destroy()
+            }
+        }
+
+    private suspend fun withPlacement(name: String, format: AdFormat,
+                                      use: suspend (Session, Placement) -> AdResult): AdResult =
+        withContext(Dispatchers.Main.immediate) {
+            val current = session ?: return@withContext AdResult.DISABLED
+            val slot = config.placements[name] ?: return@withContext AdResult.UNKNOWN_PLACEMENT
+            if (slot.format != format) return@withContext AdResult.WRONG_FORMAT
+            val usage = current.scope.async {
+                if (initialize().await()) use(current, slot) else AdResult.FAILED
+            }
+            try {
+                usage.await()
+            } catch (error: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (current === session) throw error
+                AdResult.DISABLED
+            } finally {
+                usage.cancel()
+            }
+        }
 
     private fun checkMain() = check(Looper.myLooper() == Looper.getMainLooper()) { "Call on the Android main thread" }
     private fun timing(operation: String, name: String?, start: Long) =

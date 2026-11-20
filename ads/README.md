@@ -1,12 +1,12 @@
 # ads · Android 广告组件
 
-宿主直接编译 `ads/` 下的 Kotlin 源文件，业务统一通过 [AdsManager.kt](AdsManager.kt) 调用开屏、插屏、横幅和原生广告。修改广告 ID 和启动策略只需编辑 [ads.json](ads.json)。
+宿主直接编译 `ads/` 下的 Kotlin 源文件，业务统一通过 [AdsManager.kt](AdsManager.kt) 调用开屏、插屏、横幅和原生广告。修改默认广告 ID 和启动策略只需编辑 [ads.json](conf/ads.json)。
 
 | 文件 | 职责 |
 | --- | --- |
 | `AdsManager.kt` | 安装、授权、启动等待，以及四类广告的业务入口。 |
-| `AdsConfig.kt` | 定义广告位、启动策略、展示结果和收益事件。 |
-| `AdBinding.kt` | 将横幅或原生广告绑定到宿主容器，并随生命周期释放。 |
+| `data/AdsConfig.kt` | 定义广告位、启动策略、展示结果和收益事件。 |
+| `conf/ads.json` | 默认广告位、广告单元 ID 和启动策略。 |
 | `runtime/` | SDK 加载、缓存、预加载阶段调度和全屏展示互斥。 |
 | `ads.gradle` | 声明广告 SDK、聚合适配器和 Maven 仓库，编译组件源码，按变体从 `ads.json` 生成配置和 Manifest 中的 AdMob App ID。 |
 
@@ -22,7 +22,7 @@
 
    默认接入 `:app`。如果应用模块叫 `:mobile`，在 `apply` 前加 `extra["manageAdsAppPath"] = ":mobile"`。脚本只把广告源码和依赖加入选定的应用模块。验证环境为 AndroidX、AGP 9.2.1、Gradle 9.4.1、compileSdk 36.1 和 minSdk 24。
 
-2. 打开 `ads/ads.json`，将示例 App ID 和广告单元 ID 换成当前产品的值。构建会把这个 App ID 自动合入 Manifest。迁移已有 AdMob 的项目时，请移除宿主原先写死的 `com.google.android.gms.ads.APPLICATION_ID`，将 `ads.json` 作为配置来源。
+2. 打开 `ads/conf/ads.json`，将示例 App ID 和广告单元 ID 换成当前产品的值。构建会把这个 App ID 自动合入 Manifest。迁移已有 AdMob 的项目时，请移除宿主原先写死的 `com.google.android.gms.ads.APPLICATION_ID`，将 `ads.json` 作为配置来源。
 
 3. 在宿主 `Application.onCreate()` 调用 `super.onCreate()` 后注册管理器。`install` 使用当前构建生成的配置。宿主可通过 `AdsManager.isEnabled` 读取广告开关。
 
@@ -39,13 +39,13 @@
    }
    ```
 
-   `startup.gate` 给出放行原因，`startup.waitMs` 记录等待时长，`startup.presentation` 给出开屏展示结果。宿主负责隐私弹窗与导航。用户在设置中修改授权时，调用 `AdsManager.setRequestPermission(consent.canRequestAds())` 更新资格。撤销后组件关闭视图绑定、释放预加载并忽略旧加载回调。
+   `startup.gate` 给出放行原因，`startup.waitMs` 记录等待时长，`startup.presentation` 给出开屏展示结果。宿主负责隐私弹窗与导航。用户在设置中修改授权时，调用 `AdsManager.setRequestPermission(consent.canRequestAds())` 更新资格。撤销后组件取消横幅和原生广告的使用协程、释放预加载并忽略旧加载回调。
 
 ## 调整启动策略
 
-`ads/ads.json` 使用标准 JSON。Gradle 在构建时校验字段、广告 ID 和广告位引用，并生成 Kotlin 配置。App 启动时直接读取生成值。修改配置后重新构建即可。
+`ads/conf/ads.json` 使用标准 JSON。Gradle 在构建时校验字段、广告 ID 和广告位引用，并生成 Kotlin 配置。App 启动时直接读取生成值。修改配置后重新构建即可。
 
-需要区分调试包或多个产品时，可在宿主 `app/src/` 下放一份完整的 `ads.json`。按当前 variant、build type、组合 flavor、各 flavor、`main` 的顺序查找，最后使用 `ads/ads.json`。例如只新增 `app/src/debug/ads.json`，release 仍使用组件内的默认文件。
+需要区分调试包或多个产品时，可在宿主 `app/src/` 下放一份完整的 `ads.json`。按当前 variant、build type、组合 flavor、各 flavor、`main` 的顺序查找，最后使用 `ads/conf/ads.json`。例如只新增 `app/src/debug/ads.json`，release 仍使用组件内的默认文件。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -78,14 +78,14 @@
 | 预加载开屏、插屏或原生 | `AdsManager.preload("editor_exit")` |
 | 展示已缓存的开屏 | `AdsManager.showAppOpen(activity, "startup_open")` |
 | 展示已缓存的插屏 | `AdsManager.showInterstitial(activity, "editor_exit")` |
-| 绑定横幅 | `AdsManager.bindBanner(container, "home_banner", viewLifecycleOwner)` |
-| 绑定默认原生卡片 | `AdsManager.bindNative(container, "home_native", viewLifecycleOwner)` |
+| 取得横幅视图 | `AdsManager.withBannerAd(context, "home_banner", widthDp) { adView -> … }` |
+| 取得原生广告 | `AdsManager.withNativeAd("home_native") { nativeAd -> … }` |
 
 预加载和全屏展示为挂起函数，主线程可以继续绘制。全屏展示在关闭、失败或当前无法展示时返回 `AdResult`，业务可在下一行继续。缓存按广告位复用，开屏与插屏共用一个全屏展示位置。
 
-横幅和原生绑定在主线程执行。Fragment 传 `viewLifecycleOwner`，Activity 传自身。同一个容器重新绑定会释放前一个绑定。列表项回收或 Compose `DisposableEffect` 销毁时调用返回句柄的 `close()`。
+`withNativeAd` 优先取预加载的 `NativeAd`，没有缓存时会先加载。`withBannerAd` 根据传入的可用宽度（dp）创建 `AdView` 并发起请求，可用 `onLoadResult` 接收横幅加载结果。两个接口都在主线程将广告交给 `use` 代码块，代码块的执行时间就是广告的使用期限。
 
-默认原生卡片用 Kotlin 创建，默认广告标识为 `Ad`。宿主可传自己的本地化文案，例如 `AdsManager.bindNative(container, "home_native", viewLifecycleOwner, adLabel = getText(R.string.ad_label))`，其中 `ad_label` 由宿主定义。要替换整个卡片，可传 `renderer = { context, nativeAd -> ... }`，返回带广告标识且已绑定素材视图的 `NativeAdView`。组件负责注册和销毁广告。
+宿主在页面的 `lifecycleScope` 中调用接口，在 `use` 中挂载视图并用 `awaitCancellation()` 保持展示。页面销毁、调用任务取消或广告请求资格撤销时，宿主在 `finally` 里移除视图，组件随后销毁广告对象。同一容器重新绑定前应取消旧任务。原生卡片布局、素材注册和横幅暂停与恢复的完整示例见 [sample 中的 AdBinding.kt](../sample/src/main/java/dev/manage/sample/AdBinding.kt)。
 
 ## 聚合与耗时
 

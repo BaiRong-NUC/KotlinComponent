@@ -79,7 +79,7 @@ class SampleActivity : ComponentActivity() {
         column.addView(banner)
         column.addView(native)
         setContentView(column)
-        AdsManager.bindBanner(banner, "home_banner", this)
-        AdsManager.bindNative(native, "home_native", this)
+        bindBanner(banner, "home_banner", this)
+        bindNative(native, "home_native", this)
     }
 }

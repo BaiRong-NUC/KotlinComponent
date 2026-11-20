@@ -1,5 +1,10 @@
 package dev.manage.ads
 
+import dev.manage.ads.data.AdResult
+import dev.manage.ads.data.AdsConfig
+import dev.manage.ads.data.EnterHome
+import dev.manage.ads.data.PreloadStage
+import dev.manage.ads.data.WaitFor
 import dev.manage.ads.runtime.StartupSchedule
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -14,10 +19,12 @@ class StartupScheduleTest {
         val sdk = CompletableDeferred<Boolean>()
         val orders = mutableListOf<String>()
         val requests = listOf("open", "native", "exit").associateWith { CompletableDeferred<AdResult>() }
-        val plan = StartupSchedule(test.backgroundScope, AdsConfig(true, emptyMap(), listOf(
-            PreloadStage(listOf("open", "native"), 2500),
-            PreloadStage(listOf("exit"), 1500)
-        ), EnterHome(mode, names, 4000, "open")), sdk, { test.currentTime }) { name ->
+        val plan = StartupSchedule(test.backgroundScope, AdsConfig(
+            true, emptyMap(), listOf(
+                PreloadStage(listOf("open", "native"), 2500),
+                PreloadStage(listOf("exit"), 1500)
+            ), EnterHome(mode, names, 4000, "open")
+        ), sdk, { test.currentTime }) { name ->
             orders.add(name)
             requests.getValue(name)
         }

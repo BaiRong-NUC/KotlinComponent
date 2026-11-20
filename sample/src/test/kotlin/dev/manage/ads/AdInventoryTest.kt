@@ -1,5 +1,6 @@
 package dev.manage.ads
 
+import dev.manage.ads.data.AdResult
 import dev.manage.ads.runtime.AdInventory
 import dev.manage.ads.runtime.FullScreenAdSession
 import kotlinx.coroutines.ExperimentalCoroutinesApi

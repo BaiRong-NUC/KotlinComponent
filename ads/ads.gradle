@@ -103,6 +103,8 @@ abstract class GenerateManageAdsConfig extends DefaultTask {
         output.parentFile.mkdirs()
         output.setText("""package dev.manage.ads
 
+import dev.manage.ads.data.*
+
 internal object AppAdsConfig {
     val value = AdsConfig(
         enabled = ${config.enabled},
@@ -178,7 +180,7 @@ def configureAds = { Project app ->
         def flavors = variant.productFlavors.collect { it.second }
         def sourceSets = ([variant.name, variant.buildType, variant.flavorName] + flavors + ['main']).findAll { it }.unique()
         def files = sourceSets.collect { app.layout.projectDirectory.file("src/${it}/ads.json") }
-        files.add(app.rootProject.layout.projectDirectory.file('ads/ads.json'))
+        files.add(app.rootProject.layout.projectDirectory.file('ads/conf/ads.json'))
         def selected = files.find { it.asFile.isFile() }
         if (selected == null) throw new GradleException("${app.path}: missing ads.json for ${variant.name}; checked ${files}")
         def text = app.providers.fileContents(selected).asText

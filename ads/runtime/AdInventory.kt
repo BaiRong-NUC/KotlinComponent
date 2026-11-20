@@ -1,6 +1,6 @@
 package dev.manage.ads.runtime
 
-import dev.manage.ads.AdResult
+import dev.manage.ads.data.AdResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred

@@ -7,9 +7,10 @@ import com.google.android.gms.ads.appopen.AppOpenAd
 import com.google.android.gms.ads.interstitial.InterstitialAd
 import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback
 import com.google.android.gms.ads.nativead.NativeAd
-import dev.manage.ads.AdFormat
-import dev.manage.ads.PaidEvent
-import dev.manage.ads.Placement
+import dev.manage.ads.data.AdFormat
+import dev.manage.ads.data.AdResult
+import dev.manage.ads.data.PaidEvent
+import dev.manage.ads.data.Placement
 
 internal sealed class LoadedAd {
     class FullScreen(val present: (Activity, FullScreenContentCallback) -> Unit) : LoadedAd()
@@ -21,11 +22,22 @@ internal sealed class LoadedAd {
 }
 
 internal class AdMobBackend(private val app: Application, private val paid: (PaidEvent) -> Unit) {
-    fun paidListener(name: String, slot: Placement, response: () -> ResponseInfo?) =
+    private fun paidListener(name: String, slot: Placement, response: () -> ResponseInfo?) =
         OnPaidEventListener { value ->
             paid(PaidEvent(name, slot.format, slot.unitId, value.valueMicros, value.currencyCode,
                 value.precisionType, response()?.loadedAdapterResponseInfo?.adSourceName))
         }
+
+    fun loadBanner(view: AdView, name: String, slot: Placement, widthDp: Int, onResult: (AdResult) -> Unit) {
+        view.setAdSize(AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(view.context, widthDp))
+        view.adUnitId = slot.unitId
+        view.onPaidEventListener = paidListener(name, slot) { view.responseInfo }
+        view.adListener = object : AdListener() {
+            override fun onAdLoaded() = onResult(AdResult.READY)
+            override fun onAdFailedToLoad(error: LoadAdError) = onResult(AdResult.FAILED)
+        }
+        view.loadAd(AdRequest.Builder().build())
+    }
 
     fun load(name: String, slot: Placement, complete: (LoadedAd?) -> Unit) {
         val request = AdRequest.Builder().build()

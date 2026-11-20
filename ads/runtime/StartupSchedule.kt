@@ -1,9 +1,9 @@
 package dev.manage.ads.runtime
 
-import dev.manage.ads.AdResult
-import dev.manage.ads.AdsConfig
-import dev.manage.ads.StartupResult
-import dev.manage.ads.WaitFor
+import dev.manage.ads.data.AdResult
+import dev.manage.ads.data.AdsConfig
+import dev.manage.ads.data.StartupResult
+import dev.manage.ads.data.WaitFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async

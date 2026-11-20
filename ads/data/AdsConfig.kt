@@ -1,4 +1,4 @@
-package dev.manage.ads
+package dev.manage.ads.data
 
 enum class AdFormat { APP_OPEN, INTERSTITIAL, NATIVE, BANNER }
 enum class WaitFor { NONE, SDK, ANY, ALL }
