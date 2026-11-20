@@ -134,14 +134,21 @@ object AdsManager {
         }
     }
 
+    //SDK 初始化——第一次调真正初始化、返回可等待的 Deferred；
+    //成功后被记住复用，失败则清掉允许重试；全程异步跑在 IO 线程
     private fun initialize(): Deferred<Boolean> {
         sdk?.let { return it }
+        //创建一个手动完成的 Deferred（CompletableDeferred），把引用存到 sdk
         val result = CompletableDeferred<Boolean>()
         sdk = result
-        val start = SystemClock.elapsedRealtime()
+        val start = SystemClock.elapsedRealtime() //记初始化开始时刻
+
+        //在 mainScope（AdsManager 的协程作用域）上启一个协程，切到 IO 线程
         mainScope.launch(Dispatchers.IO) {
+            //SDK 就绪回调
             try {
                 MobileAds.initialize(app) {
+                    // 初始化完成后切到主线程发送点位
                     mainScope.launch {
                         result.complete(true)
                         timing("sdk_ready", null, start)
@@ -290,7 +297,10 @@ object AdsManager {
             }
         }
 
+    // 判断是否是主线程
     private fun checkMain() = check(Looper.myLooper() == Looper.getMainLooper()) { "Call on the Android main thread" }
+
+    // 上传点位
     private fun timing(operation: String, name: String?, start: Long) =
         onTiming(AdTiming(operation, name, SystemClock.elapsedRealtime() - start))
 }
