@@ -17,7 +17,7 @@ data class AdsConfig(
     val preloadStages: List<PreloadStage>,
     val enterHome: EnterHome
 )
-
+ 
 enum class AdResult {
     READY, DISMISSED, DISABLED, UNKNOWN_PLACEMENT, WRONG_FORMAT, NOT_READY,
     BUSY, INVALID_HOST, FAILED, TIMED_OUT

@@ -17,6 +17,7 @@ import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 
 typealias NativeRenderer = (Context, NativeAd) -> NativeAdView
+internal val defaultNativeRenderer: NativeRenderer = { context, ad -> defaultNativeView(context, ad, "Ad") }
 
 class AdBinding internal constructor(
     private val container: ViewGroup,
@@ -31,8 +32,6 @@ class AdBinding internal constructor(
         private set
 
     init {
-        (container.getTag(R.id.manage_ads_binding) as? AdBinding)?.close()
-        container.setTag(R.id.manage_ads_binding, this)
         if (owner.lifecycle.currentState == Lifecycle.State.DESTROYED) close()
         else owner.lifecycle.addObserver(this)
     }
@@ -113,12 +112,11 @@ class AdBinding internal constructor(
         banner = null
         nativeView = null
         nativeAd = null
-        if (container.getTag(R.id.manage_ads_binding) === this) container.setTag(R.id.manage_ads_binding, null)
         onClose(this)
     }
 }
 
-internal fun defaultNativeView(context: Context, ad: NativeAd): NativeAdView {
+internal fun defaultNativeView(context: Context, ad: NativeAd, adLabel: CharSequence): NativeAdView {
     val view = NativeAdView(context)
     val column = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     view.addView(column)
@@ -127,7 +125,7 @@ internal fun defaultNativeView(context: Context, ad: NativeAd): NativeAdView {
         it.visibility = if (text.isNullOrBlank()) View.GONE else View.VISIBLE
         column.addView(it)
     }
-    label(context.getString(R.string.manage_ads_attribution))
+    label(adLabel.ifBlank { "Ad" })
     view.headlineView = label(ad.headline)
     ad.icon?.drawable?.let { image ->
         val size = (48 * context.resources.displayMetrics.density).roundToInt()

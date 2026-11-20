@@ -1,4 +1,4 @@
-package dev.manage.ads
+package dev.manage.ads.runtime
 
 internal class FullScreenAdSession<T : Any> {
     private var activeAd: T? = null

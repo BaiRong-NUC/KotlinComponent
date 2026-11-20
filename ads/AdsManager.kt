@@ -11,6 +11,11 @@ import androidx.lifecycle.LifecycleOwner
 import com.google.android.gms.ads.AdError
 import com.google.android.gms.ads.FullScreenContentCallback
 import com.google.android.gms.ads.MobileAds
+import dev.manage.ads.runtime.AdInventory
+import dev.manage.ads.runtime.AdMobBackend
+import dev.manage.ads.runtime.FullScreenAdSession
+import dev.manage.ads.runtime.LoadedAd
+import dev.manage.ads.runtime.StartupSchedule
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
 
@@ -22,10 +27,12 @@ object AdsManager {
     private var sdk: CompletableDeferred<Boolean>? = null
     private var session: Session? = null
     private val fullscreen = FullScreenAdSession<LoadedAd.FullScreen>()
-    private val bindings = mutableSetOf<AdBinding>()
+    private val bindings = mutableMapOf<ViewGroup, AdBinding>()
     private var onTiming: (AdTiming) -> Unit = {}
 
-    fun install(application: Application, config: AdsConfig, onPaid: (PaidEvent) -> Unit = {},
+    val isEnabled: Boolean get() = ::config.isInitialized && config.enabled
+
+    fun install(application: Application, config: AdsConfig = AppAdsConfig.value, onPaid: (PaidEvent) -> Unit = {},
                 onTiming: (AdTiming) -> Unit = {}) {
         checkMain()
         if (::app.isInitialized) {
@@ -68,7 +75,7 @@ object AdsManager {
             session = null
             previous.inventory.clear()
             previous.scope.cancel()
-            bindings.toList().forEach(AdBinding::close)
+            bindings.values.toList().forEach(AdBinding::close)
         }
     }
 
@@ -166,21 +173,28 @@ object AdsManager {
 
     fun bindBanner(container: ViewGroup, name: String, owner: LifecycleOwner,
                    onResult: (AdResult) -> Unit = {}): AdBinding =
-        bind(container, name, owner, AdFormat.BANNER, onResult, ::defaultNativeView)
+        bind(container, name, owner, AdFormat.BANNER, onResult, defaultNativeRenderer)
 
     fun bindNative(container: ViewGroup, name: String, owner: LifecycleOwner,
-                   renderer: NativeRenderer = ::defaultNativeView, onResult: (AdResult) -> Unit = {}): AdBinding =
+                   renderer: NativeRenderer = defaultNativeRenderer, onResult: (AdResult) -> Unit = {}): AdBinding =
         bind(container, name, owner, AdFormat.NATIVE, onResult, renderer)
+
+    fun bindNative(container: ViewGroup, name: String, owner: LifecycleOwner,
+                   adLabel: CharSequence, onResult: (AdResult) -> Unit = {}): AdBinding =
+        bindNative(container, name, owner, { context, ad -> defaultNativeView(context, ad, adLabel) }, onResult)
 
     private fun bind(container: ViewGroup, name: String, owner: LifecycleOwner, format: AdFormat,
                      onResult: (AdResult) -> Unit, renderer: NativeRenderer): AdBinding {
         checkMain()
-        val binding = AdBinding(container, owner) { bindings.remove(it) }
+        bindings[container]?.close()
+        val binding = AdBinding(container, owner) { closed ->
+            if (bindings[container] === closed) bindings.remove(container)
+        }
         if (binding.closed) {
             onResult(AdResult.INVALID_HOST)
             return binding
         }
-        bindings.add(binding)
+        bindings[container] = binding
         val current = session
         val slot = if (::config.isInitialized) config.placements[name] else null
         val error = when {

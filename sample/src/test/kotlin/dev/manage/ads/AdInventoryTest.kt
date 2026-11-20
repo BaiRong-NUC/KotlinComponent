@@ -1,5 +1,7 @@
 package dev.manage.ads
 
+import dev.manage.ads.runtime.AdInventory
+import dev.manage.ads.runtime.FullScreenAdSession
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*

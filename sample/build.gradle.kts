@@ -1,9 +1,10 @@
-plugins { id("com.android.application") }
-
-apply(from = rootProject.file("ads/ads-config.gradle"))
+plugins {
+    id("com.android.application")
+}
 
 android {
     namespace = "dev.manage.sample"
+    testOptions.unitTests.isReturnDefaultValues = true
     compileSdk { version = release(36) { minorApiLevel = 1 } }
     defaultConfig {
         applicationId = "dev.manage.sample"
@@ -17,7 +18,8 @@ android {
 }
 
 dependencies {
-    implementation(project(":ads"))
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.9.0")
     implementation("androidx.activity:activity:1.9.0")
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")
 }

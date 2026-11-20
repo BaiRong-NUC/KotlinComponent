@@ -5,7 +5,6 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("com.android.library") version "9.2.1"
         id("com.android.application") version "9.2.1"
     }
 }
@@ -17,7 +16,7 @@ dependencyResolutionManagement {
     }
 }
 
-apply(from = "gradle/ads-repositories.settings.gradle")
-
 rootProject.name = "Manage"
-include(":ads", ":sample")
+include(":sample")
+extra["manageAdsAppPath"] = ":sample"
+apply(from = "ads/ads.gradle")

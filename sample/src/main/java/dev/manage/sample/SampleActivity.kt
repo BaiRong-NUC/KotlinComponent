@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 class SampleApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        AdsManager.install(this, AppAdsConfig.value)
+        AdsManager.install(this)
     }
 }
 
@@ -36,7 +36,7 @@ class SampleActivity : ComponentActivity() {
     }
 
     private fun requestPermission(complete: (Boolean) -> Unit) {
-        if (!AppAdsConfig.value.enabled) {
+        if (!AdsManager.isEnabled) {
             complete(false)
             return
         }

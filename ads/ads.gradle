@@ -1,5 +1,17 @@
-import groovy.json.JsonSlurper
-import org.gradle.api.tasks.CacheableTask
+import com.google.gson.GsonBuilder
+import com.google.gson.Strictness
+import com.google.gson.ToNumberPolicy
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.*
+
+buildscript {
+    repositories { mavenCentral() }
+    dependencies { classpath 'com.google.code.gson:gson:2.11.0' }
+}
 
 @CacheableTask
 abstract class GenerateManageAdsConfig extends DefaultTask {
@@ -7,6 +19,7 @@ abstract class GenerateManageAdsConfig extends DefaultTask {
     @Input abstract Property<String> getConfigPath()
     @Input abstract Property<String> getPackageName()
     @OutputDirectory abstract DirectoryProperty getOutputDirectory()
+    @OutputFile abstract RegularFileProperty getManifestFile()
 
     static Map parse(String text, String path) {
         def requireField = { boolean valid, String message ->
@@ -14,13 +27,16 @@ abstract class GenerateManageAdsConfig extends DefaultTask {
         }
         def root
         try {
-            root = new JsonSlurper().parseText(text)
+            root = new GsonBuilder().setStrictness(Strictness.STRICT)
+                .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
+                .create().fromJson(text, Object)
         } catch (Exception error) {
             throw new GradleException("${path}: invalid JSON", error)
         }
         def fields = { obj, names, label ->
             requireField(obj instanceof Map, "${label} must be an object")
-            requireField((obj.keySet() - names).empty, "${label} unknown fields: ${obj.keySet() - names}")
+            def unknown = obj.keySet() - names
+            requireField(unknown.empty, "${label} unknown fields: ${unknown}")
         }
         fields(root, ['enabled', 'admobAppId', 'placements', 'startup'], 'root')
         requireField(root.enabled instanceof Boolean, 'enabled must be boolean')
@@ -85,9 +101,7 @@ abstract class GenerateManageAdsConfig extends DefaultTask {
         def show = gate.showBeforeHome == null ? 'null' : "\"${gate.showBeforeHome}\""
         def output = outputDirectory.file('AppAdsConfig.kt').get().asFile
         output.parentFile.mkdirs()
-        output.setText("""package ${packageName.get()}
-
-import dev.manage.ads.*
+        output.setText("""package dev.manage.ads
 
 internal object AppAdsConfig {
     val value = AdsConfig(
@@ -98,25 +112,93 @@ internal object AppAdsConfig {
     )
 }
 """, 'UTF-8')
+        def hostAlias = outputDirectory.file('HostAdsConfig.kt').get().asFile
+        if (packageName.get() != 'dev.manage.ads') {
+            hostAlias.setText("""package ${packageName.get()}
+
+internal typealias AppAdsConfig = dev.manage.ads.AppAdsConfig
+""", 'UTF-8')
+        } else {
+            java.nio.file.Files.deleteIfExists(hostAlias.toPath())
+        }
+        def manifest = manifestFile.get().asFile
+        manifest.parentFile.mkdirs()
+        manifest.setText("""<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="${config.admobAppId}" />
+    </application>
+</manifest>
+""", 'UTF-8')
     }
 }
 
-plugins.withId('com.android.application') {
-    androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+def targetAppPath = extensions.extraProperties.has('manageAdsAppPath') ?
+    extensions.extraProperties.get('manageAdsAppPath') : ':app'
+if (findProject(targetAppPath) == null) {
+    throw new GradleException("ads: include ${targetAppPath} before applying ads/ads.gradle, or set manageAdsAppPath to your application module path")
+}
+
+gradle.settingsEvaluated { settings ->
+    settings.dependencyResolutionManagement.repositories {
+        if (findByName('Google') == null) google()
+        if (findByName('MavenRepo') == null) mavenCentral()
+        if (findByName('GoogleHsdp') == null) {
+            exclusiveContent {
+                forRepository { google { name = 'GoogleHsdp' } }
+                filter { includeModule('com.google.android.play', 'hsdp') }
+            }
+        }
+        maven {
+            url = uri('https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea')
+            content { includeGroupByRegex(/com\.mbridge.*/) }
+        }
+        maven {
+            url = uri('https://artifact.bytedance.com/repository/pangle/')
+            content { includeGroupByRegex(/com\.pangle.*/) }
+        }
+    }
+}
+
+def configureAds = { Project app ->
+    app.extensions.getByName('android').sourceSets.main.kotlin.srcDir(app.rootProject.file('ads'))
+    app.dependencies {
+        implementation 'com.google.android.gms:play-services-ads:25.5.0'
+        implementation 'androidx.lifecycle:lifecycle-runtime:2.9.4'
+        implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+        implementation 'com.google.android.play:hsdp:2.2.0'
+        implementation 'com.google.ads.mediation:applovin:13.6.4.2'
+        implementation 'com.google.ads.mediation:facebook:6.22.0.0'
+        implementation 'com.google.ads.mediation:mintegral:17.1.81.1'
+        implementation('com.google.ads.mediation:pangle:8.3.0.4.0') {
+            exclude group: 'com.pangle.global', module: 'tiktok-business-android-sdk-comp'
+        }
+    }
+    def components = app.extensions.getByName('androidComponents')
+    components.onVariants(components.selector().all()) { variant ->
         def flavors = variant.productFlavors.collect { it.second }
         def sourceSets = ([variant.name, variant.buildType, variant.flavorName] + flavors + ['main']).findAll { it }.unique()
-        def files = sourceSets.collect { layout.projectDirectory.file("src/${it}/ads.json") }
+        def files = sourceSets.collect { app.layout.projectDirectory.file("src/${it}/ads.json") }
+        files.add(app.rootProject.layout.projectDirectory.file('ads/ads.json'))
         def selected = files.find { it.asFile.isFile() }
-        if (selected == null) throw new GradleException("Missing ads.json for ${variant.name}; checked ${sourceSets}")
-        def text = providers.fileContents(selected).asText
-        def path = project.relativePath(selected.asFile)
+        if (selected == null) throw new GradleException("${app.path}: missing ads.json for ${variant.name}; checked ${files}")
+        def text = app.providers.fileContents(selected).asText
+        def path = app.rootProject.relativePath(selected.asFile)
+        def namespace = variant.namespace
+        def output = app.layout.buildDirectory.dir("generated/manageAds/${variant.name}")
         variant.manifestPlaceholders.put('manageAdsAppId', text.map { GenerateManageAdsConfig.parse(it, path).admobAppId })
-        def generator = tasks.register("generate${variant.name.capitalize()}AdsConfig", GenerateManageAdsConfig) {
+        def generator = app.tasks.register("generate${variant.name.capitalize()}AdsConfig", GenerateManageAdsConfig) {
             configText.set(text)
             configPath.set(path)
-            packageName.set(variant.namespace)
-            outputDirectory.set(layout.buildDirectory.dir("generated/manageAds/${variant.name}"))
+            packageName.set(namespace)
+            outputDirectory.set(output)
         }
         variant.sources.kotlin.addGeneratedSourceDirectory(generator, { it.outputDirectory })
+        variant.sources.manifests.addGeneratedManifestFile(generator, { it.manifestFile })
+    }
+}
+
+gradle.beforeProject { app ->
+    if (app.path == targetAppPath) {
+        app.pluginManager.withPlugin('com.android.application') { configureAds(app) }
     }
 }
