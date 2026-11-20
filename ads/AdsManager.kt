@@ -217,12 +217,27 @@ object AdsManager {
             gate.copy(presentation = presentation)
         }
 
+    // 按需预加载某个广告位的挂起函数: 业务主动调它，把广告先加载进缓存备用，返回加载结果
     suspend fun preload(name: String): AdResult = withContext(Dispatchers.Main.immediate) {
         val current = session ?: return@withContext AdResult.DISABLED
+
+        // 配置文件中没有这个广告名
         val slot = config.placements[name] ?: return@withContext AdResult.UNKNOWN_PLACEMENT
+
+        // 横幅广告不允许走 preload——横幅要绑定 AdView 按容器宽度加载
         if (slot.format == AdFormat.BANNER) return@withContext AdResult.WRONG_FORMAT
+
+        // initialize() 拿到 SDK 初始化 Deferred，await() 等它完成
         if (!initialize().await()) return@withContext AdResult.FAILED
+
+        // await SDK 期间 session 可能被重置。引用比较发现换了 → 返回 DISABLED
         if (current !== session) return@withContext AdResult.DISABLED
+
+        /**
+         * 调 AdInventory.load(name) 真正发广告请求
+         *
+         * 走 Session 里定义的 request lambda → backend.load
+         */
         current.inventory.load(name).await()
     }
 
