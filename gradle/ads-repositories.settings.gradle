@@ -1,0 +1,16 @@
+gradle.settingsEvaluated { settings ->
+    settings.dependencyResolutionManagement.repositories {
+        exclusiveContent {
+            forRepository { google { name = "GoogleHsdp" } }
+            filter { includeModule("com.google.android.play", "hsdp") }
+        }
+        maven {
+            url = uri("https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea")
+            content { includeGroupByRegex("com\\.mbridge.*") }
+        }
+        maven {
+            url = uri("https://artifact.bytedance.com/repository/pangle/")
+            content { includeGroupByRegex("com\\.pangle.*") }
+        }
+    }
+}

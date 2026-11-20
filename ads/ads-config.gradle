@@ -1,0 +1,122 @@
+import groovy.json.JsonSlurper
+import org.gradle.api.tasks.CacheableTask
+
+@CacheableTask
+abstract class GenerateManageAdsConfig extends DefaultTask {
+    @Input abstract Property<String> getConfigText()
+    @Input abstract Property<String> getConfigPath()
+    @Input abstract Property<String> getPackageName()
+    @OutputDirectory abstract DirectoryProperty getOutputDirectory()
+
+    static Map parse(String text, String path) {
+        def requireField = { boolean valid, String message ->
+            if (!valid) throw new GradleException("${path}: ${message}")
+        }
+        def root
+        try {
+            root = new JsonSlurper().parseText(text)
+        } catch (Exception error) {
+            throw new GradleException("${path}: invalid JSON", error)
+        }
+        def fields = { obj, names, label ->
+            requireField(obj instanceof Map, "${label} must be an object")
+            requireField((obj.keySet() - names).empty, "${label} unknown fields: ${obj.keySet() - names}")
+        }
+        fields(root, ['enabled', 'admobAppId', 'placements', 'startup'], 'root')
+        requireField(root.enabled instanceof Boolean, 'enabled must be boolean')
+        requireField(root.admobAppId instanceof String && root.admobAppId ==~ /ca-app-pub-\d{16}~\d{10}/, 'invalid admobAppId')
+        requireField(root.placements instanceof Map, 'placements must be an object')
+        root.placements.each { name, slot ->
+            requireField(name ==~ /[A-Za-z0-9_.-]+/, "invalid placement name ${name}")
+            fields(slot, ['format', 'unitId'], "placements.${name}")
+            requireField(slot.format in ['app_open', 'interstitial', 'native', 'banner'], "${name}.format is invalid")
+            requireField(slot.unitId instanceof String && slot.unitId ==~ /ca-app-pub-\d{16}\/\d{10}/, "${name}.unitId is invalid")
+        }
+        fields(root.startup, ['preloadStages', 'enterHome'], 'startup')
+        def references = { values, label ->
+            requireField(values instanceof List && values.every { it instanceof String && root.placements.containsKey(it) },
+                "${label} contains an unknown placement or is not an array")
+            requireField(values.toSet().size() == values.size(), "${label} contains duplicates")
+        }
+        def duration = { value, label ->
+            requireField((value instanceof Integer || value instanceof Long) && value >= 0, "${label} must be a nonnegative integer")
+        }
+        def scheduled = [] as Set
+        requireField(root.startup.preloadStages instanceof List, 'startup.preloadStages must be an array')
+        root.startup.preloadStages.eachWithIndex { stage, index ->
+            String label = "startup.preloadStages[${index}]"
+            fields(stage, ['placements', 'timeoutMs'], label)
+            references(stage.placements, "${label}.placements")
+            requireField(!stage.placements.empty, "${label}.placements is empty")
+            stage.placements.each { name ->
+                requireField(root.placements[name].format != 'banner', "${name} requires a measured banner container")
+                requireField(scheduled.add(name), "${name} is scheduled twice")
+            }
+            duration(stage.timeoutMs, "${label}.timeoutMs")
+        }
+        def gate = root.startup.enterHome
+        fields(gate, ['waitFor', 'placements', 'maxWaitMs', 'showBeforeHome'], 'startup.enterHome')
+        requireField(gate.waitFor in ['none', 'sdk', 'any', 'all'], 'enterHome.waitFor is invalid')
+        if (!gate.containsKey('placements')) gate.placements = []
+        references(gate.placements, 'enterHome.placements')
+        requireField((gate.waitFor in ['all', 'any']) == !gate.placements.empty, 'enterHome.placements must be nonempty only for any/all')
+        requireField(scheduled.containsAll(gate.placements), 'enterHome.placements must appear in preloadStages')
+        duration(gate.maxWaitMs, 'enterHome.maxWaitMs')
+        if (gate.showBeforeHome != null) {
+            requireField(scheduled.contains(gate.showBeforeHome) && root.placements[gate.showBeforeHome].format == 'app_open',
+                'enterHome.showBeforeHome requires a scheduled app_open placement')
+        }
+        return root
+    }
+
+    static String names(List values) {
+        return 'listOf(' + values.collect { "\"${it}\"" }.join(', ') + ')'
+    }
+
+    @TaskAction void generate() {
+        def config = parse(configText.get(), configPath.get())
+        def slots = config.placements.collect { name, slot ->
+            "\"${name}\" to Placement(AdFormat.${slot.format.toUpperCase(Locale.ROOT)}, \"${slot.unitId}\")"
+        }
+        def stages = config.startup.preloadStages.collect { stage ->
+            "PreloadStage(${names(stage.placements)}, ${stage.timeoutMs}L)"
+        }
+        def gate = config.startup.enterHome
+        def show = gate.showBeforeHome == null ? 'null' : "\"${gate.showBeforeHome}\""
+        def output = outputDirectory.file('AppAdsConfig.kt').get().asFile
+        output.parentFile.mkdirs()
+        output.setText("""package ${packageName.get()}
+
+import dev.manage.ads.*
+
+internal object AppAdsConfig {
+    val value = AdsConfig(
+        enabled = ${config.enabled},
+        placements = mapOf(${slots.join(',\n            ')}),
+        preloadStages = listOf(${stages.join(',\n            ')}),
+        enterHome = EnterHome(WaitFor.${gate.waitFor.toUpperCase(Locale.ROOT)}, ${names(gate.placements)}, ${gate.maxWaitMs}L, ${show})
+    )
+}
+""", 'UTF-8')
+    }
+}
+
+plugins.withId('com.android.application') {
+    androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+        def flavors = variant.productFlavors.collect { it.second }
+        def sourceSets = ([variant.name, variant.buildType, variant.flavorName] + flavors + ['main']).findAll { it }.unique()
+        def files = sourceSets.collect { layout.projectDirectory.file("src/${it}/ads.json") }
+        def selected = files.find { it.asFile.isFile() }
+        if (selected == null) throw new GradleException("Missing ads.json for ${variant.name}; checked ${sourceSets}")
+        def text = providers.fileContents(selected).asText
+        def path = project.relativePath(selected.asFile)
+        variant.manifestPlaceholders.put('manageAdsAppId', text.map { GenerateManageAdsConfig.parse(it, path).admobAppId })
+        def generator = tasks.register("generate${variant.name.capitalize()}AdsConfig", GenerateManageAdsConfig) {
+            configText.set(text)
+            configPath.set(path)
+            packageName.set(variant.namespace)
+            outputDirectory.set(layout.buildDirectory.dir("generated/manageAds/${variant.name}"))
+        }
+        variant.sources.kotlin.addGeneratedSourceDirectory(generator, { it.outputDirectory })
+    }
+}

@@ -1,0 +1,4 @@
+<resources>
+    <item name="manage_ads_binding" type="id"/>
+    <string name="manage_ads_attribution">Ad</string>
+</resources>
